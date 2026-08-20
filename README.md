@@ -7,22 +7,89 @@ This repository contains the scripts used to generate MC-Eval binary-derived ass
 - RISC-V64 Linux
 - ARM64 macOS
 
-For each MC-Eval task and optimization level (`O0` and `O2`), the datasets contain:
+There are 50 MC-Eval tasks in each optimization split (`O0` and `O2`).
 
-- `task_name` — MC-Eval task identifier
-- `source_code` — original C source
-- `compiler_asm` — compiler-generated assembly from `clang -S`
-- `object_asm` — disassembly of the relocatable object file
-- `shared_asm` — disassembly of the linked shared library
-- `program_asm` — disassembly of the linked executable
+## Final dataset schema
 
-The final relocation-preserving datasets use:
+For each MC-Eval task and optimization level, the final relocation-preserving datasets contain:
 
-- Relocatable objects: `llvm-objdump -dr`
-- Linked shared libraries: `llvm-objdump -drR`
-- Linked executables: `llvm-objdump -drR`
+- `task_name` - MC-Eval task identifier
+- `source_code` - original C source
+- `compiler_asm` - compiler-generated assembly from the normal, non-PIC compilation path
+- `object_asm` - relocation-preserving disassembly of the normal relocatable object
+- `shared_asm` - relocation-preserving disassembly of the linked shared library
+- `program_asm` - relocation-preserving disassembly of the linked executable
+- `compiler_pic_asm` - compiler-generated assembly from the PIC compilation path using `-fPIC -S`
+- `pic_object_asm` - relocation-preserving disassembly of the PIC relocatable object
 
-The relocation flags are important because plain `objdump -d` omits relocation information that is present in relocatable object files.
+The six assembly representations belong to two distinct compilation-provenance families:
+
+```text
+NORMAL
+compiler_asm
+    -> object_asm
+    -> program_asm
+
+PIC
+compiler_pic_asm
+    -> pic_object_asm
+    -> shared_asm
+```
+
+This distinction is important.
+
+The linked shared library is built from separately compiled position-independent (`-fPIC`) objects. Therefore, `shared_asm` belongs to the PIC compilation lineage and should be compared against `compiler_pic_asm` and `pic_object_asm`, rather than against the normal `compiler_asm` and `object_asm` lineage.
+
+The final datasets are published at:
+
+```text
+adpretko/mceval_x86_linux_reloc
+adpretko/mceval_arm_linux_reloc
+adpretko/mceval_riscv_linux_reloc
+adpretko/mceval_arm_mac_reloc
+```
+
+## Relocation-preserving disassembly
+
+The final datasets preserve relocation information in binary-derived assembly.
+
+For relocatable objects on Linux:
+
+```text
+objdump -dr
+```
+
+For linked shared libraries and executables on Linux:
+
+```text
+objdump -drR
+```
+
+On macOS, the corresponding commands use Apple LLVM objdump:
+
+```text
+xcrun llvm-objdump -dr
+xcrun llvm-objdump -drR
+```
+
+The relocation flags are important because plain `objdump -d` omits relocation records that are still present in relocatable object files.
+
+## Source and executable construction
+
+MC-Eval entries contain function-level C source rather than complete standalone programs with their own `main()`.
+
+The original MC-Eval source is preserved unchanged for:
+
+- `source_code`
+- normal compiler-generated assembly
+- PIC compiler-generated assembly
+- normal relocatable object construction
+- PIC relocatable object construction
+- shared-library construction
+
+A synthetic `main()` is appended only to a temporary executable source file so that a linked executable can be produced.
+
+The synthetic entry point is used only to make executable construction possible. It does not execute or test the MC-Eval function.
 
 ## Linux
 
@@ -30,46 +97,149 @@ The relocation flags are important because plain `objdump -d` omits relocation i
 
 Original Linux generation script.
 
-It compiles MC-Eval for the supported Linux targets and generates compiler assembly, relocatable objects, shared libraries, executables, and their disassembly.
+It compiles MC-Eval for the supported Linux targets and generates:
+
+- compiler assembly
+- relocatable objects
+- shared libraries
+- linked executables
+- binary-derived disassembly
 
 The original binary disassembly used plain `-d`.
+
+This script is retained for reproducibility of the original generation workflow.
 
 ### `build_mceval_linux_reloc.py`
 
 Relocation-preserving Linux generation script.
 
-It generates the corrected Linux datasets using:
+It produces the corrected relocation-preserving output trees and uses:
 
-- `.o` -> `objdump -dr`
-- shared library -> `objdump -drR`
-- executable -> `objdump -drR`
+```text
+normal relocatable object -> objdump -dr
+shared library            -> objdump -drR
+executable                -> objdump -drR
+```
 
-The corrected outputs are stored separately from the original datasets.
+The relocation-preserving outputs are stored separately from the original generated datasets.
+
+The builder also produces the PIC object used for shared-library construction.
 
 ### `validate_mceval_linux_reloc.py`
 
 Validates the locally generated relocation-preserving Linux datasets.
 
-The validation checks that:
+The validation checks include:
 
-- the expected tasks and optimization splits are present;
-- source code is preserved;
-- compiler-generated assembly is consistent with the original generation;
-- the underlying instruction disassembly has not unexpectedly changed;
-- saved objdump output exactly matches fresh `-dr` / `-drR` invocations;
-- generated binaries have the expected target formats.
+- all 50 tasks are present in both `O0` and `O2`
+- task names and source code are preserved
+- compiler-generated assembly is consistent with the expected generation
+- the underlying instruction disassembly has not unexpectedly changed
+- saved objdump output matches fresh relocation-preserving disassembly
+- generated binaries have the expected target formats
+
+### `add_pic_references_mceval_linux.py`
+
+Adds the explicit PIC-reference artifacts needed by the final eight-column dataset.
+
+For every task in both optimization splits it creates:
+
+```text
+compiler.pic.s
+code.pic.o.objdump
+```
+
+`compiler.pic.s` is generated from the original source using the same target and optimization level as the existing PIC object, but with:
+
+```text
+-fPIC -S
+```
+
+instead of object generation.
+
+`code.pic.o.objdump` is generated by disassembling the existing PIC relocatable object with:
+
+```text
+objdump -dr
+```
+
+The script intentionally reuses the already generated `code.pic.o`.
+
+It does not rebuild the existing:
+
+- normal relocatable object
+- PIC relocatable object
+- shared library
+- executable
+
+This preserves the exact PIC object that was already used to construct the shared library.
 
 ### `upload_mceval_linux_hf.py`
 
-Uploads the original Linux datasets to Hugging Face.
+Uploads the original Linux MC-Eval datasets.
+
+This script belongs to the original generation workflow and is retained for reproducibility.
 
 ### `upload_mceval_linux_hf_reloc.py`
 
-Builds Hugging Face `DatasetDict` objects from the relocation-preserving Linux outputs and uploads the corrected datasets.
+Builds and uploads the earlier relocation-preserving dataset representation.
+
+This script predates the addition of the explicit PIC compiler and PIC object reference columns.
+
+It is retained for reproducibility.
+
+### `upload_mceval_linux_hf_with_pic.py`
+
+Packages the final Linux datasets with the complete eight-column schema:
+
+```text
+task_name
+source_code
+compiler_asm
+object_asm
+shared_asm
+program_asm
+compiler_pic_asm
+pic_object_asm
+```
+
+It supports all three Linux targets:
+
+```text
+x86_linux
+arm_linux
+riscv_linux
+```
+
+which correspond to:
+
+```text
+adpretko/mceval_x86_linux_reloc
+adpretko/mceval_arm_linux_reloc
+adpretko/mceval_riscv_linux_reloc
+```
+
+The script validates the expected row count, schema, task ordering, source-code identity, and non-empty assembly fields before upload.
+
+To validate locally without uploading:
+
+```bash
+python upload_mceval_linux_hf_with_pic.py --validate-only
+```
+
+To build, validate, and upload the final Linux datasets:
+
+```bash
+python upload_mceval_linux_hf_with_pic.py
+```
 
 ### `validate_mceval_linux_hf.py`
 
-Loads the uploaded relocation-preserving datasets back from Hugging Face and verifies that every uploaded row and field exactly matches the corresponding local dataset.
+Validation utility for the earlier relocation-preserving Hugging Face workflow.
+
+It is retained alongside the original upload scripts for reproducibility.
+
+The final PIC-aware packaging and schema checks are performed by `upload_mceval_linux_hf_with_pic.py`.
 
 ## ARM64 macOS
 
@@ -79,18 +249,24 @@ Original ARM64 macOS generation script.
 
 For each task it produces:
 
-- `source.c`
-- `program_source.c`
-- `compiler.s`
-- `code.o`
-- `code.o.objdump`
-- `code.pic.o`
-- `code.dylib`
-- `code.dylib.objdump`
-- `code.program`
-- `code.program.objdump`
+```text
+source.c
+program_source.c
+compiler.s
+code.o
+code.o.objdump
+code.pic.o
+code.dylib
+code.dylib.objdump
+code.program
+code.program.objdump
+```
 
-The synthetic `main()` in `program_source.c` is used only to make it possible to link an executable. The original MC-Eval source is preserved unchanged in `source.c`.
+`source.c` contains the original MC-Eval source.
+
+`program_source.c` contains the source plus the synthetic `main()` used only for executable linking.
+
+`code.pic.o` is the position-independent object used to construct `code.dylib`.
 
 ### Why macOS uses a refresh workflow
 
@@ -98,64 +274,289 @@ The corrected macOS dataset is intentionally not rebuilt into a differently name
 
 Mach-O dynamic libraries contain an `LC_ID_DYLIB` load command. Rebuilding a dylib under a longer `_reloc` path can change the embedded dylib path, increase the size of the load command, and shift the linked Mach-O layout.
 
-To ensure that the corrected dataset uses exactly the same original binary artifacts, the macOS correction therefore uses this workflow:
+That would cause the newly built binary to differ from the original even when the C source, compiler options, and intended code generation were otherwise unchanged.
+
+To ensure that the corrected dataset uses the same original binary artifacts, the macOS relocation-preserving workflow is:
 
 1. Copy the original generated directory byte-for-byte to a `_reloc` directory.
-2. Leave all source files, compiler assembly, objects, dylibs, and executables unchanged.
-3. Regenerate only the `.objdump` files using the relocation-preserving flags.
-4. Validate that every non-`.objdump` artifact remains byte-for-byte identical.
+2. Leave the source files, compiler assembly, objects, dylibs, and executables unchanged.
+3. Regenerate only the `.objdump` files using relocation-preserving flags.
+4. Validate that the non-objdump artifacts remain byte-for-byte identical.
 
 This avoids introducing binary changes caused only by rebuilding under a different filesystem path.
 
 ### `refresh_mceval_arm64_macos_objdump_reloc.py`
 
-Regenerates only the objdump text from the copied original binaries:
+Regenerates the objdump text from the copied original binaries using relocation-preserving flags:
 
-- `code.o` -> `llvm-objdump -dr`
-- `code.dylib` -> `llvm-objdump -drR`
-- `code.program` -> `llvm-objdump -drR`
+```text
+code.o       -> xcrun llvm-objdump -dr
+code.dylib   -> xcrun llvm-objdump -drR
+code.program -> xcrun llvm-objdump -drR
+```
 
-All other files remain untouched.
+All other existing artifacts remain untouched.
 
 ### `validate_mceval_arm64_macos_reloc.py`
 
-Performs local validation of the corrected macOS dataset.
+Performs local validation of the relocation-preserving macOS dataset.
 
 It verifies that:
 
-- both `O0` and `O2` contain all 50 MC-Eval tasks;
-- the old and new directory/file layouts match;
-- every non-`.objdump` file is byte-for-byte identical to the original;
-- every new `.objdump` file exactly matches a fresh invocation of the intended `-dr` or `-drR` command;
-- the binary format is ARM64 Mach-O.
+- both `O0` and `O2` contain all 50 MC-Eval tasks
+- the old and new directory/file layouts match
+- non-objdump artifacts remain byte-for-byte identical where expected
+- refreshed objdump files match fresh invocations of the intended commands
+- the binary format is ARM64 Mach-O
+
+This covers 100 task/split instances:
+
+```text
+50 O0 + 50 O2 = 100
+```
+
+### `add_pic_references_mceval_arm64_macos.py`
+
+Adds the two explicit PIC-reference artifacts needed by the final macOS dataset:
+
+```text
+compiler.pic.s
+code.pic.o.objdump
+```
+
+`compiler.pic.s` is generated from the original source using the ARM64 macOS PIC compilation path with:
+
+```text
+-fPIC -S
+```
+
+`code.pic.o.objdump` is generated from the existing PIC object using:
+
+```text
+xcrun llvm-objdump -dr code.pic.o
+```
+
+The script deliberately reuses the existing `code.pic.o` that was already used to construct `code.dylib`.
+
+It does not rebuild the existing:
+
+- `code.pic.o`
+- `code.dylib`
+- `code.o`
+- `code.program`
+
+This preserves the provenance between:
+
+```text
+compiler_pic_asm
+    -> pic_object_asm
+    -> shared_asm
+```
 
 ### `upload_mceval_arm64_macos_hf.py`
 
-Uploads the original ARM64 macOS dataset.
+Uploads the original ARM64 macOS MC-Eval dataset.
+
+It is retained for reproducibility of the original workflow.
 
 ### `upload_mceval_arm64_macos_hf_reloc.py`
 
-Builds the corrected ARM64 macOS `DatasetDict` from the `_reloc` output directory and uploads it to `adpretko/mceval_arm_mac_reloc`.
+Builds and uploads the earlier relocation-preserving ARM64 macOS dataset.
+
+It predates the addition of the explicit PIC reference columns and is retained for reproducibility.
+
+### `upload_mceval_arm64_macos_hf_with_pic.py`
+
+Produces the final ARM64 macOS dataset with the eight-column schema:
+
+```text
+task_name
+source_code
+compiler_asm
+object_asm
+shared_asm
+program_asm
+compiler_pic_asm
+pic_object_asm
+```
+
+Target repository:
+
+```text
+adpretko/mceval_arm_mac_reloc
+```
+
+The script verifies the existing live relocation-preserving dataset against the corresponding local artifact tree before adding the PIC-reference fields.
+
+It then adds:
+
+```text
+compiler_pic_asm
+pic_object_asm
+```
+
+from:
+
+```text
+compiler.pic.s
+code.pic.o.objdump
+```
+
+To validate locally without uploading:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py --validate-only
+```
+
+To upload the final dataset:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py
+```
+
+To reload and verify the final live Hugging Face dataset:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py --verify-live
+```
 
 ### `validate_mceval_arm64_macos_hf.py`
 
-Downloads the uploaded relocation-preserving macOS dataset and compares all 100 rows (`50 O0 + 50 O2`) and every field exactly against the locally reconstructed dataset.
+Validation utility for the earlier relocation-preserving macOS Hugging Face workflow.
+
+It is retained for reproducibility.
+
+The final PIC-aware live dataset can additionally be verified directly with:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py --verify-live
+```
+
+## Final provenance model
+
+The important methodological distinction in the final datasets is:
+
+```text
+                 NORMAL COMPILATION
+
+source_code
+    |
+    +--> compiler_asm
+            |
+            +--> object_asm
+                    |
+                    +--> program_asm
+
+
+                   PIC COMPILATION
+
+source_code
+    |
+    +--> compiler_pic_asm
+            |
+            +--> pic_object_asm
+                    |
+                    +--> shared_asm
+```
+
+The two families originate from the same C source and optimization level, but they are not required to produce identical assembly.
+
+In particular, optimized PIC and non-PIC compilation can legitimately differ because position-independent code generation changes how addresses, globals, calls, and other operations are represented.
+
+For that reason, downstream analysis should preserve the two provenance families rather than treating all six representations as one linear compilation chain.
 
 ## Recommended workflow
 
 ### Linux
 
-1. Run `build_mceval_linux_reloc.py`.
-2. Run `validate_mceval_linux_reloc.py`.
-3. Run `upload_mceval_linux_hf_reloc.py`.
-4. Run `validate_mceval_linux_hf.py`.
+Generate the relocation-preserving binaries:
 
-### macOS
+```bash
+python build_mceval_linux_reloc.py
+```
 
-1. Copy `generated_mceval_arm64_mac` to `generated_mceval_arm64_mac_reloc`.
-2. Run `refresh_mceval_arm64_macos_objdump_reloc.py`.
-3. Run `validate_mceval_arm64_macos_reloc.py`.
-4. Run `upload_mceval_arm64_macos_hf_reloc.py`.
-5. Run `validate_mceval_arm64_macos_hf.py`.
+Validate them:
 
-The original scripts and datasets are retained for reproducibility. The `_reloc` versions are the corrected datasets that preserve relocation information in the binary-derived assembly.
+```bash
+python validate_mceval_linux_reloc.py
+```
+
+Generate the explicit PIC compiler/object references:
+
+```bash
+python add_pic_references_mceval_linux.py
+```
+
+Validate final Hugging Face packaging without uploading:
+
+```bash
+python upload_mceval_linux_hf_with_pic.py --validate-only
+```
+
+Upload the final eight-column datasets:
+
+```bash
+python upload_mceval_linux_hf_with_pic.py
+```
+
+### ARM64 macOS
+
+Start from the original generated macOS dataset and create the relocation-preserving copy:
+
+```text
+generated_mceval_arm64_mac
+    ->
+generated_mceval_arm64_mac_reloc
+```
+
+Refresh the binary disassembly:
+
+```bash
+python3 refresh_mceval_arm64_macos_objdump_reloc.py
+```
+
+Validate the relocation-preserving copy:
+
+```bash
+python3 validate_mceval_arm64_macos_reloc.py
+```
+
+Generate the explicit PIC compiler/object references:
+
+```bash
+python3 add_pic_references_mceval_arm64_macos.py
+```
+
+Validate final dataset packaging without uploading:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py --validate-only
+```
+
+Upload the final eight-column dataset:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py
+```
+
+Verify the final live Hugging Face dataset:
+
+```bash
+python3 upload_mceval_arm64_macos_hf_with_pic.py --verify-live
+```
+
+## Reproducibility note
+
+The original generation, upload, and validation scripts are intentionally retained.
+
+They document the progression from:
+
+```text
+original binary disassembly
+        ->
+relocation-preserving disassembly
+        ->
+explicit normal/PIC provenance
+```
+
+The final `_reloc` Hugging Face datasets contain the complete eight-column representation and should be used for the current cross-ISA translation experiments.
